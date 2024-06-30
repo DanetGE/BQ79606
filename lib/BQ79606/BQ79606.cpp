@@ -1,6 +1,7 @@
 #include "BQ79606.h"
+#include <HardwareSerial.h>
 
-hw_timer_t *Reciving_Timeout = NULL;
+//hw_timer_t *Reciving_Timeout = NULL;
 bool UART_RX_RDY = 0;
 extern int RTI_TIMEOUT;
 int bRes = 0;
@@ -11,16 +12,15 @@ byte bBuf[8];
 byte bReturn = 0;
 byte response_frame2[(MAXBYTES+6)*TOTALBOARDS];
 byte bFrame[(2+6)*TOTALBOARDS];
-int nCurrentBoard = 0;
+uint8_t nCurrentBoard = 0;
 
-HardwareSerial BMS_UART(1); // definir un Serial para UART1
-hw_timer_t *Reciving_Timeout = NULL;
 
-void IRAM_ATTR UART_Timeout_Interrupcion() {
- 	UART_Timeout = true;
-	timerStop(Reciving_Timeout);
-	timerRestart(Reciving_Timeout);
-}
+
+//void IRAM_ATTR UART_Timeout_Interrupcion() {
+// 	UART_Timeout = true;
+//	timerStop(Reciving_Timeout);
+//	timerRestart(Reciving_Timeout);
+//}
 
 //******
 //PINGS
@@ -30,21 +30,22 @@ void IRAM_ATTR UART_Timeout_Interrupcion() {
 void Ini_ESP(){
     //Wake up pin inicialization
     pinMode(Wake_pin, OUTPUT);
-    digitalWrite(Wake_pin, 1);
+    digitalWrite(Wake_pin, HIGH);
 
 	//Fault pin Inicialization
 	pinMode(Fault_pin, INPUT);
 
     //UART inicilization
-    BMS_UART.begin(BAUDRATE, SERIAL_8N1, BMS_RX, BMS_TX);
+    Serial2.begin(BAUDRATE);
+	Serial.begin(115200);
 
 	//UART reciving TimeOut timer
-	Reciving_Timeout = timerBegin(0, 80, true); // Timer 0, clock divider 80
-  	timerAttachInterrupt(Reciving_Timeout, &UART_Timeout_Interrupcion, true); // Attach the interrupt handling function
-  	timerAlarmWrite(Reciving_Timeout, 1000000, true); // Interrupt every 1s
-  	timerAlarmEnable(Reciving_Timeout); // Enable the alarm
-	timerStop(Reciving_Timeout);
-	timerRestart(Reciving_Timeout);
+	//Reciving_Timeout = timerBegin(0, 80, true); // Timer 0, clock divider 80
+  	//timerAttachInterrupt(Reciving_Timeout, &UART_Timeout_Interrupcion, true); // Attach the interrupt handling function
+  	//timerAlarmWrite(Reciving_Timeout, 1000000, true); // Interrupt every 1s
+  	//timerAlarmEnable(Reciving_Timeout); // Enable the alarm
+	//timerStop(Reciving_Timeout);
+	//timerRestart(Reciving_Timeout);
 }
 
 
@@ -52,19 +53,19 @@ void Ini_ESP(){
 //Wake up instruction
 void Wake79606() {
     // toggle wake signal
-    digitalWrite(Wake_pin, 0);  // assert wake (active low)
-    delayMicroseconds(300);     //250us to 300us
-    digitalWrite(Wake_pin, 1);  // deassert wake
-    delay(7*TOTALBOARDS);       //tSU(WAKE) transition time from shutdown to active - 7ms from wake receive to wake propagate for each device
+    digitalWrite(Wake_pin, LOW);  // assert wake (active low)
+    delayMicroseconds(275);       //250us to 300us
+    digitalWrite(Wake_pin, HIGH); // deassert wake
+    delay(12*TOTALBOARDS);        //tSU(WAKE) transition time from shutdown to active - 7ms from wake receive to wake propagate for each device
 }
 
 
 
 //Communication Clear
 void CommClear(void){
-    BMS_UART.end();             //Comunication end
-    pinMode(BMS_RX,OUTPUT);     //RX pin is an output
-    digitalWrite(BMS_RX,0);     //RX to low
+    Serial2.end();             //Comunication end
+    pinMode(BMS_TX,OUTPUT);     //RX pin is an output
+    digitalWrite(BMS_TX,0);     //RX to low
 
     delay(17*(BAUDRATE/1000));  //Wait 17 bits periods
 }
@@ -73,13 +74,13 @@ void CommClear(void){
 
 //Device go to sleep to active state
 void CommSleepToWake(void) {
-    BMS_UART.end();             //Comunication end
-    pinMode(BMS_RX,OUTPUT);     //RX pin is an output
-    digitalWrite(BMS_RX,0);     //RX to low
+    Serial2.end();             //Comunication end
+    pinMode(BMS_TX,OUTPUT);     //RX pin is an output
+    digitalWrite(BMS_TX,0);     //RX to low
 
 	delayMicroseconds(260);     // 250us to 300us, same as wake
 
-    BMS_UART.begin(BAUDRATE, SERIAL_8N1, BMS_RX, BMS_TX);   //UART inicilization
+    Serial2.begin(BAUDRATE, SERIAL_8N1);   //UART inicilization
     
     delayMicroseconds(170*TOTALBOARDS);     //tSU(SLPtoACT) transition time from sleep to active - 170us from wake receive to wake propagate for each device
 }
@@ -88,48 +89,54 @@ void CommSleepToWake(void) {
 
 //Communication Reset
 void CommReset(void) {
-    BMS_UART.end();             //Comunication end
+    Serial2.end();             //Comunication end
+	pinMode(BMS_TX,OUTPUT);     //RX pin is an output
+    digitalWrite(BMS_TX,0);     //RX to low
 	delayMicroseconds(500);     // should cover any possible baud rate
+	digitalWrite(BMS_TX,1);     //RX to High
 
-    BMS_UART.begin(250000, SERIAL_8N1, BMS_RX, BMS_TX);   //UART inicilization at 250000 Mbs
-
-	delayMicroseconds(100);     //wait a bit just to make sure the microcontroller is ready
+    Serial2.begin(250000, SERIAL_8N1);   //UART inicilization at 250000 Mbs
 
     //tell the base device to set its baudrate to the chosen BAUDRATE, and propagate to the rest of the stack
     //then set the microcontroller to the appropriate baudrate to match
     if(BAUDRATE == 1000000)
     {
         WriteReg(0, COMM_CTRL, 0x3C3C, 2, FRMWRT_ALL_NR);   //set COMM_CTRL and DAISY_CHAIN_CTRL registers
+		delayMicroseconds(500);
         //ALL 606 DEVICES ARE NOW AT 1M BAUDRATE
 
-        BMS_UART.begin(BAUDRATE, SERIAL_8N1, BMS_RX, BMS_TX);   //UART inicilization at 1M baudrate
+        Serial2.begin(BAUDRATE, SERIAL_8N1);   //UART inicilization at 1M baudrate
     }
     else if(BAUDRATE == 500000)
     {   
         WriteReg(0, COMM_CTRL, 0x383C, 2, FRMWRT_ALL_NR);   //set COMM_CTRL and DAISY_CHAIN_CTRL registers
+		delayMicroseconds(250);
         //ALL 606 DEVICES ARE NOW AT 1M BAUDRATE
 
-        BMS_UART.begin(BAUDRATE, SERIAL_8N1, BMS_RX, BMS_TX);   //UART inicilization at 500k baudrate
+        Serial2.begin(BAUDRATE, SERIAL_8N1);   //UART inicilization at 500k baudrate
     }
     else if(BAUDRATE == 250000)
     {
         WriteReg(0, COMM_CTRL, 0x343C, 2, FRMWRT_ALL_NR);   //set COMM_CTRL and DAISY_CHAIN_CTRL registers
+		delayMicroseconds(250);
         //ALL 606 DEVICES ARE NOW AT 1M BAUDRATE
 
-        BMS_UART.begin(BAUDRATE, SERIAL_8N1, BMS_RX, BMS_TX);   //UART inicilization at 250k baudrate
+        Serial2.begin(BAUDRATE, SERIAL_8N1);   //UART inicilization at 250k baudrate
     }
     else if(BAUDRATE == 125000)
     {
         WriteReg(0, COMM_CTRL, 0x303C, 2, FRMWRT_ALL_NR);   //set COMM_CTRL and DAISY_CHAIN_CTRL registers
+		delayMicroseconds(250);
         //ALL 606 DEVICES ARE NOW AT 1M BAUDRATE
 
-        
+        Serial2.begin(BAUDRATE, SERIAL_8N1);   //UART inicilization at 500k baudrate
     }
     else
     {
         printf("ERROR: INVALID BAUDRATE CHOSEN IN BQ79606.h FILE. Choosing default 1M baudrate:\n\n");
         WriteReg(0, COMM_CTRL, 0x3C3C, 2, FRMWRT_ALL_NR);
-        BMS_UART.begin(1000000, SERIAL_8N1, BMS_RX, BMS_TX);   //UART inicilization at 1M baudrate
+		delayMicroseconds(250);
+        Serial2.begin(1000000, SERIAL_8N1);   //UART inicilization at 1M baudrate
     }
 
     delayMicroseconds(100);
@@ -151,7 +158,7 @@ void AutoAddress()
     //dummy write to ECC_TEST (sync DLL)
     WriteReg(0,  ECC_TEST, 0x00, 1, FRMWRT_ALL_NR);
 
-    //clear CONFIG in case it is set
+	//clear CONFIG in case it is set
     WriteReg(0, CONFIG, 0x00, 1, FRMWRT_ALL_NR);
 
     //enter auto addressing mode
@@ -160,29 +167,53 @@ void AutoAddress()
     //set addresses for all boards in daisy-chain
     for (nCurrentBoard = 0; nCurrentBoard < TOTALBOARDS; nCurrentBoard++)
     {
-        WriteReg(nCurrentBoard, DEVADD_USR, nCurrentBoard, 1, FRMWRT_ALL_NR);
+        WriteReg(0, DEVADD_USR, nCurrentBoard, 1, FRMWRT_ALL_NR);
+		delay(100);
     }
 
-    //set all devices as a stack device
-    WriteReg(0, CONFIG, 0x02, 1, FRMWRT_ALL_NR);
+
+	WriteReg(1, CONFIG, 0x02, 1, FRMWRT_ALL_NR); //Stack
 
     //if there's only 1 board, it's the base AND the top of stack, so change it to those
     if(TOTALBOARDS==1)
     {
-        WriteReg(0, CONFIG, 0x01, 1, FRMWRT_SGL_NR);
+        WriteReg(0, CONFIG, 0x01, 1, FRMWRT_SGL_NR);	//Base and top device
     }
     //otherwise set the base and top of stack individually
     else
     {
-        WriteReg(0, CONFIG, 0x00, 1, FRMWRT_SGL_NR);             //base
-        WriteReg(TOTALBOARDS-1, CONFIG, 0x03, 1, FRMWRT_SGL_NR); //top of stack
+        WriteReg(0, CONFIG, 0x00, 1, FRMWRT_SGL_NR);  //base
+		
+        WriteReg((TOTALBOARDS-1), CONFIG, 0x03, 1, FRMWRT_SGL_NR); //top of stack
     }
 
     //dummy read from ECC_TEST (sync DLL)
-    ReadReg(TOTALBOARDS-1, ECC_TEST, response_frame2, 1, 0, FRMWRT_ALL_R);
+    ReadReg(0, ECC_TEST, response_frame2, 1, 0, FRMWRT_ALL_R);
+	
+
+	WriteReg(0, DAISY_CHAIN_CTRL, 0x0D, 1, FRMWRT_SGL_NR);  //base
+	WriteReg(0, COMM_CTRL, 0x04, 1, FRMWRT_STK_NR);  //stack
+	WriteReg((TOTALBOARDS-1), DAISY_CHAIN_CTRL, 0x32, 1, FRMWRT_SGL_NR);  //Top
+
+
+	Serial.print("Addres: ");
+	delay(1);
+
+    
+	for (nCurrentBoard = 0; nCurrentBoard < TOTALBOARDS; nCurrentBoard++) {
+        memset(response_frame2, 0, sizeof(response_frame2));
+        ReadReg(nCurrentBoard, DEVADD_USR, response_frame2, 1, 0, FRMWRT_SGL_R);
+		Serial.print((String)"Board "+nCurrentBoard+"= ");
+
+        Serial.print(response_frame2[4]);
+
+		Serial.println(".");
+
+		delay(10);
+	}
+
 
 //    //OPTIONAL: read back all device addresses
-//    WriteReg(0, COMM_TO, 0x00, 1, FRMWRT_ALL_NR); //Disable communication timeout because printf takes a long time
 //    for (nCurrentBoard = 0; nCurrentBoard < TOTALBOARDS; nCurrentBoard++) {
 //        memset(response_frame2, 0, sizeof(response_frame2));
 //        ReadReg(nCurrentBoard, DEVADD_USR, response_frame2, 1, 0, FRMWRT_SGL_R);
@@ -298,7 +329,7 @@ int WriteFrame(byte bID, uint16_t wAddr, byte * pData, byte bLen, byte bWriteTyp
 	bPktLen += 2;
 	//THIS SEEMS to occasionally drop bytes from the frame. Sometimes is not sending the last frame of the CRC.
 	//(Seems to be caused by stack overflow, so take precautions to reduce stack usage in function calls)
-	BMS_UART.write(pFrame, bPktLen);
+	Serial2.write(pFrame, bPktLen);
 
 	return bPktLen;
 }
@@ -309,6 +340,8 @@ int WriteFrame(byte bID, uint16_t wAddr, byte * pData, byte bLen, byte bWriteTyp
 int ReadReg(byte bID, uint16_t wAddr, byte * pData, byte bLen, uint32_t dwTimeOut, byte bWriteType) {
 	bRes = 0;
 	count = 100000;
+	int recepciones = 0;
+	byte recibido [64];
 	int Reciving_Len = 0;
 
 	if(bWriteType == FRMWRT_SGL_R){
@@ -324,29 +357,38 @@ int ReadReg(byte bID, uint16_t wAddr, byte * pData, byte bLen, uint32_t dwTimeOu
 
 
 	//Correct bWriteType
-	if(bWriteType == (FRMWRT_SGL_R || FRMWRT_STK_R || FRMWRT_ALL_R)){
-
-		ReadFrameReq(bID, wAddr, bLen, bWriteType);	//Read FRame Request
+	if((bWriteType == FRMWRT_SGL_R) || (bWriteType == FRMWRT_STK_R) || (bWriteType == FRMWRT_ALL_R)){
+		//Read FRame Request)
+		if(ReadFrameReq(bID, wAddr, bLen, bWriteType) == 0){
+			Serial.println("No se pueden leer mas de 128 bytes");
+		};	
 		memset(pData, 0, sizeof(pData));			//pData = empty
-		timerStart(Reciving_Timeout);				//Timer timeout start
+		//timerStart(Reciving_Timeout);				//Timer timeout start
 
+		int Time = 0;
 		//Waiting firts byte, If not reciving the first byte in 1 second send and error
-		while((BMS_UART.available() == 0) && (UART_Timeout  == false)){}
-
-		timerStop(Reciving_Timeout);	//Timer Timeout Stop
-		timerRestart(Reciving_Timeout);	//Timer Timeout Reset counter value
-
-		//Timeout error
-		if(UART_Timeout  == true){
-			UART_Timeout = false;
-			bRes = -1;		//Timeout error
+		while((Serial2.available() == 0) && (Time < 10)){
+			delay(5);
+			Time ++;
+			if(Time == 10){
+				Serial.println("Se ha excedido el tiempo de lectura");
+				bRes = -1;		//Timeout error
+			}
 		}
+			Time = 0;
+		//timerStop(Reciving_Timeout);	//Timer Timeout Stop
+		//timerRestart(Reciving_Timeout);	//Timer Timeout Reset counter value
+
+			
+
 		//Data avalible, start to read all data
-		else if(BMS_UART.available() > 0){
-			bRes = BMS_UART.readBytes(pData, Reciving_Len);
+		if(Serial2.available() > 0){
+
+			bRes = Serial2.readBytes(pData, Reciving_Len);
+
 		}
 	}
-	//Correct bWriteType
+	//InCorrect bWriteType
 	else{
 		bRes = 0;
 	}
@@ -358,12 +400,15 @@ int ReadReg(byte bID, uint16_t wAddr, byte * pData, byte bLen, uint32_t dwTimeOu
 
 //Read Frame Request
 int ReadFrameReq(byte bID, uint16_t wAddr, byte bByteToReturn, byte bWriteType) {
+	
 	bReturn = bByteToReturn - 1;
 
-	if (bReturn > 127){
+	if (bReturn <= 127){
+		return WriteFrame(bID, wAddr, &bReturn, 1, bWriteType);
+	}
+	else{
 		return 0;
 	}
-	return WriteFrame(bID, wAddr, &bReturn, 1, bWriteType);
 }
 
 
@@ -482,12 +527,12 @@ void InitDevices() {
     WriteReg(0, OV_THRESH, 0x5B, 1, FRMWRT_ALL_NR); //sets cell OV to 4.3V
     //WriteReg(0, OTUT_CTRL, 0x3F, 1, FRMWRT_ALL_NR); //enable GPIO OT/UT
     //WriteReg(0, OTUT_THRESH, 0xFF, 1, FRMWRT_ALL_NR); //sets OT to 35% TSREF, UT to 75%, programmabe in 1% increment
-    WriteReg(0, GPIO_ADC_CONF, 0x3F, 1, FRMWRT_ALL_NR); //configure GPIO as AUX voltage (absolute voltage, set to 0 for ratiometric)
+    WriteReg(0, GPIO_ADC_CONF, 0x00, 1, FRMWRT_ALL_NR); //configure GPIO as AUX voltage (absolute voltage, set to 0 for ratiometric)
     for (nCurrentBoard = 0; nCurrentBoard < TOTALBOARDS; nCurrentBoard++) {
         //set adc delay for each device
         WriteReg(nCurrentBoard, ADC_DELAY, 0x00, 1, FRMWRT_SGL_NR);
     }
-    WriteReg(0, AUX_ADC_CONF, 0x08, 1, FRMWRT_ALL_NR); //1MHz AUX sample rate,  128 decimation  ratio
+    WriteReg(0, AUX_ADC_CONF, 0x0C, 1, FRMWRT_ALL_NR); //1MHz AUX sample rate,  256 decimation  ratio
     WriteReg(0, CELL_ADC_CONF1, 0x67, 1, FRMWRT_ALL_NR); //256 decimation ratio, 1MHz sample. 1.2 Hz LPF
     WriteReg(0, CELL_ADC_CONF2, 0x00, 1, FRMWRT_ALL_NR); //single conversion
     //enable continuous sampling. Otherwise, single conversions with CONTROL2[CELL_ADC_GO]
