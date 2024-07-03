@@ -59,11 +59,11 @@ void loop() {
         i = 0;
         currentBoard=0;
 
-        delay(2000);
+        
 
         WriteReg(0, CONTROL2, 0x13, 1, FRMWRT_ALL_NR);
 
-        delay(2);
+        delay(20);
 
         
 
@@ -78,7 +78,7 @@ void loop() {
         
         if(Bytesleidos == -1){
           Serial.println("No se ha podido leer los datos, se ha excedido el tiempo");
-          delay(1000);
+          //delay(1000);
         }
         else{
 
@@ -106,7 +106,11 @@ void loop() {
 
                 //do the two's complement of the resultant 16 bit data item, and multiply by 190.73uV to get an actual voltage
                 float cellVoltage = Complement(rawData,0.00019073);
-
+                
+                if(cellVoltage >= 4.2){
+                  digitalWrite(BMS_OK, LOW);
+                  Serial.println("Fallo de tensión");
+                }
                 //print the voltages - it is i/2 because cells start from 1 up to 6
                 //and there are 2 bytes per cell (i value is twice the cell number),
                 //and it's +1 because cell names start with "Cell1"
